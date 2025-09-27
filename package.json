@@ -4,10 +4,11 @@
   "description": "Mineflayer bot on Vercel",
   "main": "main.js",
   "scripts": {
-    "start": "node main.js"
+    "start": "node main.js" 
   },
   "dependencies": {
     "mineflayer": "^4.19.0",
-    "http": "^0.0.1-security"
+    "http": "^0.0.1-security",
+    "https": "^1.0.0" 
   }
 }
