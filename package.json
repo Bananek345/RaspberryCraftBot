@@ -2,12 +2,12 @@
   "name": "raspberry-craft-bot",
   "version": "1.0.0",
   "description": "Mineflayer bot on Vercel",
-  "main": "index.js", // <--- Upewnij się, że to nazwa Twojego głównego pliku JS
+  "main": "main.js",
   "scripts": {
-    "start": "node main.js" // <--- Uruchamia Twojego bota
+    "start": "node main.js"
   },
   "dependencies": {
-    "mineflayer": "^4.19.0", 
-    "http": "^0.0.1-security" // Jeśli używasz tego modułu
+    "mineflayer": "^4.19.0",
+    "http": "^0.0.1-security"
   }
 }
