@@ -1,5 +1,6 @@
 const mineflayer = require('mineflayer');
-const http = require('http'); // Moduł do stworzenia serwera HTTP
+const http = require('http'); 
+const https = require('https'); // Potrzebne do PING-owania URL po HTTPS
 
 // --- Konfiguracja Serwera Minecraft ---
 const MINECRAFT_SERVER_HOST = 'raspberrycraft.falixsrv.me';
@@ -8,11 +9,19 @@ const BOT_USERNAME = 'RaspberryBot';
 const AUTH_MODE = 'offline';
 const MINECRAFT_VERSION = '1.8.8';
 
-// --- Konfiguracja Serwera Statusu HTTP ---
-const STATUS_PORT = 10000;
-let botStatus = 'offline'; // Zmienna przechowująca status bota
+// --- Konfiguracja Vercel i Statusu HTTP ---
+// Używamy portu dynamicznie przydzielonego przez Vercel (process.env.PORT) lub 10000 lokalnie
+const STATUS_PORT = process.env.PORT || 10000; 
 
-// --- Funkcja Tworząca Bota ---
+// WAŻNE: Adres URL do PING-owania, aby zapobiec uśpieniu przez Vercel
+const PING_URL = 'https://raspberry-craft-bot.vercel.app/'; 
+
+let botStatus = 'offline';   // Status bota
+let isRegistered = false;    // Symulacja stanu rejestracji
+
+// -------------------------------------------------------------------
+
+// --- Funkcja Tworząca Bota (z mechanizmem reconnect) ---
 function createBot() {
     const bot = mineflayer.createBot({
         host: MINECRAFT_SERVER_HOST,
@@ -24,76 +33,54 @@ function createBot() {
 
     // --- Obsługa Zdarzeń Bota ---
 
-    // Po pomyślnym dołączeniu
     bot.on('login', () => {
-        console.log(`Bot ${BOT_USERNAME} zalogował się.`);
+        console.log(`[MC] Bot ${BOT_USERNAME} zalogował się.`);
         botStatus = 'online na serverze';
     });
 
     // System Logowania/Rejestracji
-    let isRegistered = false; // Zmienna symulująca, czy bot jest już zarejestrowany
-
     bot.once('spawn', () => {
-        console.log('Bot odrodził się na serwerze.');
+        console.log('[MC] Bot odrodził się na serwerze.');
 
-        // Daj serwerowi chwilę na załadowanie przed wysłaniem komendy
         setTimeout(() => {
             if (isRegistered) {
-                // Jeśli bot jest już "zarejestrowany" (w symulacji), użyj logowania
-                const loginCommand = `/login RHaaloaspbertyBot`;
+                // Logowanie
+                const loginCommand = `/login RHaaloaspbertyBot`; 
                 bot.chat(loginCommand);
-                console.log(`Wysłano komendę logowania: ${loginCommand}`);
+                console.log(`[MC] Wysłano komendę logowania: ${loginCommand}`);
             } else {
-                // Jeśli to pierwszy raz, użyj rejestracji i ustaw isRegistered na true
-                const registerCommand = `/register RHaaloaspberryBot RHaaloaspberryBot`; // Wymagane 2 hasła
+                // Rejestracja (używamy tego samego hasła dwukrotnie)
+                const registerCommand = `/register RHaaloaspberryBot RHaaloaspberryBot`; 
                 bot.chat(registerCommand);
-                isRegistered = true; // Zmieniamy stan na zarejestrowany
-                console.log(`Wysłano komendę rejestracji: ${registerCommand}`);
+                isRegistered = true; 
+                console.log(`[MC] Wysłano komendę rejestracji: ${registerCommand}`);
             }
         }, 3000); // Czekaj 3 sekundy
     });
 
-    // Po wyrzuceniu (kick)
-    bot.on('kicked', (reason, loggedIn) => {
-        console.log(`Bot został wyrzucony! Powód: ${reason}`);
+    // Funkcja do obsługi rozłączenia i reconnectu
+    function handleDisconnect(reason) {
+        console.log(`[MC] Rozłączenie! Powód: ${reason}`);
         botStatus = 'offline';
         // Automatyczne ponowne dołączenie
         setTimeout(() => {
-            console.log('Próba ponownego dołączenia...');
-            createBot(); // Wywołanie funkcji tworzącej bota rozpocznie próbę reconnectu
-        }, 5000); // Czekaj 5 sekund przed ponownym dołączeniem
-    });
-
-    // Błąd
-    bot.on('error', (err) => {
-        console.log(`Wystąpił błąd: ${err.message}`);
-        botStatus = 'offline';
-        // W przypadku błędu (np. nie ma serwera) też spróbuj ponownie
-        setTimeout(() => {
-            console.log('Próba ponownego dołączenia po błędzie...');
-            createBot();
-        }, 10000); // Czekaj 10 sekund po błędzie
-    });
-
-    // Rozłączenie (np. serwer się wyłączył)
-    bot.on('end', (reason) => {
-        console.log(`Połączenie zakończone. Powód: ${reason}`);
-        botStatus = 'offline';
-        // Automatyczne ponowne dołączenie
-        setTimeout(() => {
-            console.log('Próba ponownego dołączenia...');
-            createBot();
-        }, 5000); // Czekaj 5 sekund przed ponownym dołączeniem
-    });
+            console.log('[MC] Próba ponownego dołączenia za 5 sekund...');
+            createBot(); 
+        }, 5000); 
+    }
+    
+    bot.on('kicked', (reason) => handleDisconnect(`Wyrzucenie: ${reason}`));
+    bot.on('end', (reason) => handleDisconnect(`Rozłączenie: ${reason}`));
+    bot.on('error', (err) => handleDisconnect(`Błąd: ${err.message}`));
 
     return bot;
 }
 
-// --- Serwer Statusu HTTP ---
+// -------------------------------------------------------------------
 
-// Tworzenie serwera
+// --- Serwer Statusu HTTP (dla Vercel) ---
+
 const server = http.createServer((req, res) => {
-    // Ustawienie nagłówków (Content-Type: text/html)
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
 
     // Prosta strona ze statusem
@@ -104,7 +91,8 @@ const server = http.createServer((req, res) => {
             <meta charset="UTF-8">
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
             <title>Status RaspberryBot</title>
-            <meta http-equiv="refresh" content="5"> <style>
+            <meta http-equiv="refresh" content="5"> 
+            <style>
                 body { font-family: Arial, sans-serif; text-align: center; margin-top: 50px; background-color: #f4f4f4; }
                 .status { font-size: 2em; padding: 20px; border-radius: 10px; display: inline-block; }
                 .online { background-color: #4CAF50; color: white; }
@@ -121,16 +109,31 @@ const server = http.createServer((req, res) => {
         </body>
         </html>
     `);
-    res.end(); // Zakończenie odpowiedzi
+    res.end(); 
 });
 
-// Nasłuchiwanie na porcie 10000
-server.listen(STATUS_PORT, () => {
-    console.log(`Serwer statusu HTTP działa na porcie ${STATUS_PORT}. Otwórz http://localhost:${STATUS_PORT} w przeglądarce.`);
-    console.log(`Pamiętaj, że na Vercel musisz skonfigurować to jako funkcję serverless/web service!`);
+// Nasłuchiwanie na porcie Vercel i adresie 0.0.0.0 (wymagane dla dostępu zewnętrznego)
+server.listen(STATUS_PORT, '0.0.0.0', () => {
+    console.log(`[HTTP] Serwer statusu HTTP działa na porcie ${STATUS_PORT}.`);
 });
+
+// -------------------------------------------------------------------
+
+// --- Mechanizm Pingowania (Keep-Alive) dla Vercel ---
+if (process.env.VERCEL) { 
+    setInterval(() => {
+        console.log('--- Wysłano PING (Keep-Alive) ---');
+        
+        // Wybieramy moduł (http lub https) w zależności od PING_URL
+        const client = PING_URL.startsWith('https') ? https : http; 
+        
+        client.get(PING_URL, (res) => {
+            console.log(`Status PING: ${res.statusCode} (OK = 200)`);
+        }).on('error', (e) => {
+            console.error(`Błąd pingowania: ${e.message}`);
+        });
+    }, 4 * 60 * 1000); // Pinguj co 4 minuty, aby zapobiec uśpieniu (limit Vercel to 5 min)
+}
 
 // --- Uruchomienie Bota ---
 createBot();
-
-
