@@ -1,6 +1,6 @@
 const mineflayer = require('mineflayer');
 const http = require('http'); 
-const https = require('https'); // Potrzebne do PING-owania URL po HTTPS
+const https = require('https'); 
 
 // --- Konfiguracja Serwera Minecraft ---
 const MINECRAFT_SERVER_HOST = 'raspberrycraft.falixsrv.me';
@@ -10,20 +10,52 @@ const AUTH_MODE = 'offline';
 const MINECRAFT_VERSION = '1.8.8';
 
 // --- Konfiguracja Vercel i Statusu HTTP ---
-// Używamy portu dynamicznie przydzielonego przez Vercel (process.env.PORT) lub 10000 lokalnie
 const STATUS_PORT = process.env.PORT || 10000; 
-
-// WAŻNE: Adres URL do PING-owania, aby zapobiec uśpieniu przez Vercel
 const PING_URL = 'https://raspberry-craft-bot.vercel.app/'; 
 
-let botStatus = 'offline';   // Status bota
-let isRegistered = false;    // Symulacja stanu rejestracji
+let botStatus = 'offline';   
+let isRegistered = false;    
+let bot = null; // Zmienna globalna dla instancji bota
+let reconnectTimeout = null; // Do przechowywania timeoutu ponownego łączenia
+const RECONNECT_DELAY = 5000; // Opóźnienie ponownego łączenia (5 sekund)
 
 // -------------------------------------------------------------------
 
-// --- Funkcja Tworząca Bota (z mechanizmem reconnect) ---
-function createBot() {
-    const bot = mineflayer.createBot({
+// --- Funkcja do ponownego łączenia ---
+function scheduleReconnect(reason) {
+    // Zapobiegaj wielokrotnym próbom ponownego łączenia
+    if (reconnectTimeout) {
+        clearTimeout(reconnectTimeout);
+    }
+    
+    console.log(`[MC] Rozłączenie! Powód: ${reason}`);
+    botStatus = 'offline';
+    
+    // Ustaw automatyczne ponowne dołączenie
+    reconnectTimeout = setTimeout(() => {
+        console.log('[MC] Próba ponownego dołączenia...');
+        // Nie tworzymy nowego bota, a wywołujemy funkcję connectBot
+        connectBot(); 
+    }, RECONNECT_DELAY); 
+}
+
+// --- Funkcja do stworzenia i podłączenia bota ---
+function connectBot() {
+    // Jeśli bot już istnieje (np. po rozłączeniu), użyjemy go, jeśli nie, stworzymy nową instancję.
+    if (bot) {
+        // Ponowne łączenie, jeśli bot już istnieje
+        bot.connect({
+            host: MINECRAFT_SERVER_HOST,
+            port: MINECRAFT_SERVER_PORT,
+            username: BOT_USERNAME,
+            auth: AUTH_MODE,
+            version: MINECRAFT_VERSION
+        });
+        return;
+    }
+    
+    // Utworzenie nowej instancji bota (tylko raz, przy pierwszym uruchomieniu)
+    bot = mineflayer.createBot({
         host: MINECRAFT_SERVER_HOST,
         port: MINECRAFT_SERVER_PORT,
         username: BOT_USERNAME,
@@ -31,17 +63,22 @@ function createBot() {
         version: MINECRAFT_VERSION
     });
 
-    // --- Obsługa Zdarzeń Bota ---
+    // --- Obsługa Zdarzeń Bota (dodana tylko raz) ---
 
     bot.on('login', () => {
         console.log(`[MC] Bot ${BOT_USERNAME} zalogował się.`);
         botStatus = 'online na serverze';
+        // Wyczyść timeout, jeśli bot się pomyślnie połączył
+        if (reconnectTimeout) {
+            clearTimeout(reconnectTimeout);
+            reconnectTimeout = null;
+        }
     });
 
     // System Logowania/Rejestracji
-    bot.once('spawn', () => {
+    bot.on('spawn', () => {
         console.log('[MC] Bot odrodził się na serwerze.');
-
+        // Dodatkowe opóźnienie, aby serwer miał czas na wysłanie komunikatów
         setTimeout(() => {
             if (isRegistered) {
                 // Logowanie
@@ -49,41 +86,29 @@ function createBot() {
                 bot.chat(loginCommand);
                 console.log(`[MC] Wysłano komendę logowania: ${loginCommand}`);
             } else {
-                // Rejestracja (używamy tego samego hasła dwukrotnie)
+                // Rejestracja
                 const registerCommand = `/register RHaaloaspberryBot RHaaloaspberryBot`; 
                 bot.chat(registerCommand);
-                isRegistered = true; 
+                isRegistered = true; // Zmień stan na zarejestrowany po pierwszej próbie
                 console.log(`[MC] Wysłano komendę rejestracji: ${registerCommand}`);
             }
-        }, 3000); // Czekaj 3 sekundy
+        }, 5000); // Wydłużono czas oczekiwania do 5 sekund
     });
 
-    // Funkcja do obsługi rozłączenia i reconnectu
-    function handleDisconnect(reason) {
-        console.log(`[MC] Rozłączenie! Powód: ${reason}`);
-        botStatus = 'offline';
-        // Automatyczne ponowne dołączenie
-        setTimeout(() => {
-            console.log('[MC] Próba ponownego dołączenia za 5 sekund...');
-            createBot(); 
-        }, 5000); 
-    }
-    
-    bot.on('kicked', (reason) => handleDisconnect(`Wyrzucenie: ${reason}`));
-    bot.on('end', (reason) => handleDisconnect(`Rozłączenie: ${reason}`));
-    bot.on('error', (err) => handleDisconnect(`Błąd: ${err.message}`));
-
-    return bot;
+    // Obsługa rozłączenia i ponownego łączenia
+    bot.on('kicked', (reason) => scheduleReconnect(`Wyrzucenie: ${reason}`));
+    bot.on('end', (reason) => scheduleReconnect(`Rozłączenie: ${reason}`));
+    bot.on('error', (err) => scheduleReconnect(`Błąd: ${err.message}`));
 }
 
 // -------------------------------------------------------------------
 
 // --- Serwer Statusu HTTP (dla Vercel) ---
+// (Pozostała część kodu HTTP i Keep-Alive jest taka sama)
 
 const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
 
-    // Prosta strona ze statusem
     res.write(`
         <!DOCTYPE html>
         <html lang="pl">
@@ -112,7 +137,6 @@ const server = http.createServer((req, res) => {
     res.end(); 
 });
 
-// Nasłuchiwanie na porcie Vercel i adresie 0.0.0.0 (wymagane dla dostępu zewnętrznego)
 server.listen(STATUS_PORT, '0.0.0.0', () => {
     console.log(`[HTTP] Serwer statusu HTTP działa na porcie ${STATUS_PORT}.`);
 });
@@ -124,7 +148,6 @@ if (process.env.VERCEL) {
     setInterval(() => {
         console.log('--- Wysłano PING (Keep-Alive) ---');
         
-        // Wybieramy moduł (http lub https) w zależności od PING_URL
         const client = PING_URL.startsWith('https') ? https : http; 
         
         client.get(PING_URL, (res) => {
@@ -132,8 +155,8 @@ if (process.env.VERCEL) {
         }).on('error', (e) => {
             console.error(`Błąd pingowania: ${e.message}`);
         });
-    }, 4 * 60 * 1000); // Pinguj co 4 minuty, aby zapobiec uśpieniu (limit Vercel to 5 min)
+    }, 4 * 60 * 1000); 
 }
 
 // --- Uruchomienie Bota ---
-createBot();
+connectBot();
